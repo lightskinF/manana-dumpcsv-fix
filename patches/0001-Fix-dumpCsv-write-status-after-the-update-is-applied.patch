@@ -1,0 +1,127 @@
+From a1e0bf095d68cf7590a257bc2af274ffca05f084 Mon Sep 17 00:00:00 2001
+From: Fabio Greco <190946960+lightskinF@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 00:42:27 +0200
+Subject: [PATCH] Fix dumpCsv: write status after the update is applied, add
+ StatusDetail column
+
+---
+ .../remote_capture/ConnectionsRegister.java   | 69 +++++++++++++++----
+ 1 file changed, 55 insertions(+), 14 deletions(-)
+
+diff --git a/app/src/main/java/com/emanuelef/remote_capture/ConnectionsRegister.java b/app/src/main/java/com/emanuelef/remote_capture/ConnectionsRegister.java
+index 95419f7..c9fc543 100644
+--- a/app/src/main/java/com/emanuelef/remote_capture/ConnectionsRegister.java
++++ b/app/src/main/java/com/emanuelef/remote_capture/ConnectionsRegister.java
+@@ -377,19 +377,28 @@ public class ConnectionsRegister {
+                 addOrUpdateCountry(type,conn,UPDATE);
+                 */
+ 
+-                //add the same parameter as the connection but just the updated bytes to the file
+-                //NB if you use the connForDump like that also the conn stats will be changed. In this case won't be a problem because
+-                //in processUpdate the conn stats will be overwritten
+-                ConnectionDescriptor connForDump = conn;
+-                connForDump.sent_bytes = update.sent_bytes - conn.sent_bytes;
+-                connForDump.rcvd_bytes = update.rcvd_bytes - conn.rcvd_bytes;
+-                dumpCsv(connForDump);
++                // Increments to be written in the CSV row, computed BEFORE applying the update.
++                // Only updates of type UPDATE_STATS carry the counters: for the other types
++                // (e.g. UPDATE_INFO only) the counters in the update are 0 and must not be
++                // subtracted from the current totals. The connection itself is not modified here.
++                final boolean hasStats = (update.update_type & ConnectionUpdate.UPDATE_STATS) != 0;
++                final long deltaSentBytes = hasStats ? (update.sent_bytes - conn.sent_bytes) : 0;
++                final long deltaRcvdBytes = hasStats ? (update.rcvd_bytes - conn.rcvd_bytes) : 0;
++                final long deltaSentPkts = hasStats ? (update.sent_pkts - conn.sent_pkts) : 0;
++                final long deltaRcvdPkts = hasStats ? (update.rcvd_pkts - conn.rcvd_pkts) : 0;
+                 // MANANA Project - end
+ 
+                 //Log.d(TAG, "update " + update.incr_id + " -> " + update.update_type);
+                 conn.processUpdate(update);
+                 processConnectionStatus(conn, stats);
+ 
++                // MANANA Project - begin
++                // The row is written AFTER processUpdate, so that Status, StatusDetail, Info and
++                // LastSeen reflect the state set by this update (e.g. the final close or reset),
++                // and not the state the connection had before it.
++                dumpCsv(conn, deltaSentBytes, deltaRcvdBytes, deltaSentPkts, deltaRcvdPkts);
++                // MANANA Project - end
++
+                 changed_pos[k++] = (pos + mSize - first_pos) % mSize;
+             }
+         }
+@@ -913,9 +922,18 @@ public class ConnectionsRegister {
+         return valuesPerCountry;
+     }
+ 
++    // Row for a new connection: the counters are the totals at creation time (increments from 0)
+     private void dumpCsv(ConnectionDescriptor conn) {
++        dumpCsv(conn, conn.sent_bytes, conn.rcvd_bytes, conn.sent_pkts, conn.rcvd_pkts);
++    }
++
++    // Row for a connection with explicit counters: bytes and packets are the increments since
++    // the previous row of the same connection, so that summing the rows of a connection gives
++    // its totals (as done by the analysis scripts and by generate_manana_stats.py)
++    private void dumpCsv(ConnectionDescriptor conn, long sentBytes, long rcvdBytes,
++                         long sentPkts, long rcvdPkts) {
+ 
+-        String dump = dumpConnectionsCsv(conn);
++        String dump = dumpConnectionsCsv(conn, sentBytes, rcvdBytes, sentPkts, rcvdPkts);
+         if(mCsvUri != null) {
+             Log.d(TAG, "Writing CSV file: " + mCsvUri);
+             //File file = new File(mCsvUri.getPath());
+@@ -936,11 +954,33 @@ public class ConnectionsRegister {
+     }
+     private String dumpHeader(){
+         StringBuilder builder = new StringBuilder();
+-        String header = "IPProto,SrcIP,SrcPort,DstIp,DstPort,UID,App,Country,ASN,ClassificationValue,Proto,Status,Info,BytesSent,BytesRcvd,PktsSent,PktsRcvd,FirstSeen,LastSeen";
++        String header = "IPProto,SrcIP,SrcPort,DstIp,DstPort,UID,App,Country,ASN,ClassificationValue,Proto,Status,Info,BytesSent,BytesRcvd,PktsSent,PktsRcvd,FirstSeen,LastSeen,StatusDetail";
+         builder.append(header);
+         return builder.toString();
+     };
++
++    // Names of zdtun_conn_status_t (submodules/zdtun/zdtun.h), in the same order. Unlike the
++    // Status column, which maps both CONN_STATUS_CLOSED and CONN_STATUS_RESET to "Closed",
++    // StatusDetail keeps an ordinary close (CLOSED) distinct from a reset (RESET).
++    private static final String[] ZDTUN_STATUS_NAMES = {
++            "NEW", "CONNECTING", "CONNECTED", "CLOSED", "ERROR",
++            "SOCKET_ERROR", "CLIENT_ERROR", "RESET", "UNREACHABLE", "SOCKS5_ERROR"
++    };
++
++    private static String getStatusDetail(ConnectionDescriptor conn) {
++        if((conn.status >= 0) && (conn.status < ZDTUN_STATUS_NAMES.length))
++            return ZDTUN_STATUS_NAMES[conn.status];
++        return "UNKNOWN_" + conn.status;
++    }
++
+     public String dumpConnectionsCsv(ConnectionDescriptor conn) {
++        if(conn == null)
++            return dumpConnectionsCsv(null, 0, 0, 0, 0);
++        return dumpConnectionsCsv(conn, conn.sent_bytes, conn.rcvd_bytes, conn.sent_pkts, conn.rcvd_pkts);
++    }
++
++    public String dumpConnectionsCsv(ConnectionDescriptor conn, long sentBytes, long rcvdBytes,
++                                     long sentPkts, long rcvdPkts) {
+         Log.d(TAG,"Update file conncsv-start");
+         StringBuilder builder = new StringBuilder();
+         AppsResolver resolver = new AppsResolver(mctx);
+@@ -965,12 +1005,13 @@ public class ConnectionsRegister {
+             builder.append(conn.l7proto);                               builder.append(",");
+             builder.append(conn.getStatusLabel(mctx));                  builder.append(",");
+             builder.append((conn.info != null) ? conn.info : "");       builder.append(",");
+-            builder.append(conn.sent_bytes);                            builder.append(",");
+-            builder.append(conn.rcvd_bytes);                            builder.append(",");
+-            builder.append(conn.sent_pkts);                             builder.append(",");
+-            builder.append(conn.rcvd_pkts);                             builder.append(",");
++            builder.append(sentBytes);                                  builder.append(",");
++            builder.append(rcvdBytes);                                  builder.append(",");
++            builder.append(sentPkts);                                   builder.append(",");
++            builder.append(rcvdPkts);                                   builder.append(",");
+             builder.append(formatMillisIso8601(mctx, conn.first_seen));                            builder.append(",");
+-            builder.append(formatMillisIso8601(mctx, conn.last_seen));
++            builder.append(formatMillisIso8601(mctx, conn.last_seen));  builder.append(",");
++            builder.append(getStatusDetail(conn));
+         }
+ 
+         Log.d(TAG,"Update file conncsv-end");
+-- 
+2.56.0.windows.2
+
