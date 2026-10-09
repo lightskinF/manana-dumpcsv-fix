@@ -96,7 +96,6 @@ Il repository di Manana su Codeberg, così com'è, non compila su un computer nu
 | `tools/filtra_dati.py` | toglie dal report le righe non dirette al server di riferimento |
 | `data/sessione1`, `data/sessione2` | report di Manana (solo le righe verso il server di riferimento, `tools/filtra_dati.py`) e registro del server delle due prove; il traffico reale della sessione 2 non è pubblicato |
 | `docs/NOTE_BUILD.md` | problemi di compilazione trovati e come risolverli |
-| `docs/MESSAGGIO_PER_IL_PROFESSORE.md` | bozza del messaggio di accompagnamento |
 
 ## Licenza
 
