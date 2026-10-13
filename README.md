@@ -17,8 +17,9 @@ In `ConnectionsRegister.connectionsUpdates` la riga del CSV veniva scritta **pri
 2. `Closed` e `Reset` erano esportati entrambi come `Closed` (`getStatus()` li unisce), anche se il codice nativo
    li distingue (`CONN_STATUS_CLOSED`, `CONN_STATUS_RESET`);
 3. per calcolare i byte della riga si modificavano i contatori dell'oggetto connessione (alias `connForDump =
-   conn`), con rischio di valori negativi sugli aggiornamenti che non portano contatori; i pacchetti erano
-   esportati come totali mentre i byte erano incrementi.
+   conn`), con rischio di valori negativi sugli aggiornamenti che non portano contatori; i byte erano
+   esportati come incrementi, i pacchetti invece come totale cumulato fino all'aggiornamento precedente (la
+   prima riga riporta i totali alla creazione), per cui la loro somma per connessione non ha significato.
 
 Nei dati della tesi (349 connessioni di laboratorio, versione originale) lo stato risultava `Closed` solo in 34 delle
 70 connessioni di RESET e TLS_RESET, e nessuna delle 301 connessioni presenti in più righe aveva uno stato diverso
